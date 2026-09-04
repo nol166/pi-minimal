@@ -1,0 +1,5 @@
+[project]
+name = "pi-minimal"
+version = "0.1.0"
+description = "Curses TUI to launch pi with only the extensions/skills you pick"
+requires-python = ">=3.10"
