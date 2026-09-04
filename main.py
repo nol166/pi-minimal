@@ -187,7 +187,8 @@ def _tui(stdscr) -> None:
             _toggle_at(sections, cursor, flat)
         elif key == "KEY_ENTER" or key == "\n":
             save_state(sections)
-            curses.endwin()  # leave curses mode so pi's TUI renders on a clean screen
+            curses.endwin()  # leave curses mode
+            os.write(1, b"\x1b[2J\x1b[H")  # clear + home; endwin leaves cursor mid-line
             os.execvp("pi", build_command(sections))
         elif key == "q":
             save_state(sections)
