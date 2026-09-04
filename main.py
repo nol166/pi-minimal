@@ -128,19 +128,21 @@ def _draw(stdscr, sections, cursor) -> None:
         if r < h:
             stdscr.addnstr(0, 0, line, w - 1)
     row = 2
+    pos = 0
     for sec in sections:
         if row < h - 3:
             stdscr.addnstr(row, 0, sec.name.upper(), w - 1, curses.A_BOLD)
         row += 1
-        for i, it in enumerate(sec.items):
+        for it in sec.items:
             if row >= h - 3:
                 break
             mark = "[x]" if it.checked else "[ ]"
             label = f" {mark} {it.name}"
-            if i == cursor:
+            if pos == cursor:
                 stdscr.addnstr(row, 0, label[: w - 1], w - 1, curses.A_REVERSE)
             else:
                 stdscr.addnstr(row, 0, label, w - 1)
+            pos += 1
             row += 1
         row += 1
     cmd = " ".join(build_command(sections))
