@@ -8,7 +8,19 @@ pi discovers a lot by default: every extension in your agent directory, every sk
 
 There is also an option for the AGENTS.md / CLAUDE.md context files. Leave it checked and pi runs normally; uncheck it and `--no-context-files` goes on the command line.
 
-Your pi `settings.json` is never touched. The selection list is saved to `~/.config/pi-minimal/selections.json`, and a plain `pi` launch afterwards behaves exactly as before. The first time you run it, only `ollama-lan` and `grove-pi-extension` are pre-checked.
+Your pi `settings.json` is never touched. The selection list is saved to `~/.config/pi-minimal/selections.json`, and a plain `pi` launch afterwards behaves exactly as before.
+
+### Default selections
+
+The first time you run pi-minimal (before `selections.json` exists), nothing is checked unless you tell it otherwise. Create `~/.config/pi-minimal/config.json` with a `default_checked` list to pre-check items by name:
+
+```json
+{
+  "default_checked": ["ollama-lan", "caveman"]
+}
+```
+
+Once you've launched once, `selections.json` takes over and the config file is ignored until you delete it.
 
 ## Where it looks
 

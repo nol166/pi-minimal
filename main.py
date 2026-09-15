@@ -15,7 +15,7 @@ from pathlib import Path
 PI_AGENT = Path(os.environ.get("PI_AGENT_DIR", "~/.pi/agent")).expanduser()
 STATE_FILE = Path(os.environ.get("PI_MINIMAL_STATE", "~/.config/pi-minimal/selections.json")).expanduser()
 CODE_EXTS = {".ts", ".js", ".mjs", ".cjs"}
-DEFAULT_CHECKED = {"ollama-lan", "grove-pi-extension"}
+CONFIG_FILE = STATE_FILE.parent / "config.json"
 CONTEXT_OPT = "AGENTS.md / CLAUDE.md context files"
 
 
@@ -91,11 +91,19 @@ def discover() -> list[Section]:
     return [exts, skills, opts]
 
 
+def _defaults() -> set[str]:
+    try:
+        cfg = json.loads(CONFIG_FILE.read_text())
+        return set(cfg.get("default_checked", []))
+    except (OSError, json.JSONDecodeError):
+        return set()
+
+
 def load_state(sections) -> None:
     try:
         saved = set(json.loads(STATE_FILE.read_text()))
     except (OSError, json.JSONDecodeError):
-        saved = set(DEFAULT_CHECKED)
+        saved = _defaults()
     for sec in sections:
         for it in sec.items:
             it.checked = it.name in saved
