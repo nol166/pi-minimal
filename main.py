@@ -53,23 +53,47 @@ def _package_dirs() -> list[Path]:
     return [d for d in out if d.is_dir()]
 
 
-def _project_skill_dirs() -> list[Path]:
-    """`.pi/skills` and `.agents/skills` from cwd up to the repo root (or filesystem root)."""
-    dirs, d = [], Path.cwd()
+def _project_dirs() -> list[Path]:
+    """cwd up to the repo root (or filesystem root)."""
+    out, d = [], Path.cwd()
     while True:
-        for sub in (".pi/skills", ".agents/skills"):
-            p = d / sub
-            if p.is_dir():
-                dirs.append(p)
+        out.append(d)
         if (d / ".git").exists() or d.parent == d:
             break
         d = d.parent
-    return dirs
+    return out
+
+
+def _frontmatter_name(path: Path) -> str | None:
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return None
+    if not lines or lines[0].strip() != "---":
+        return None
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        if line.startswith("name:"):
+            return line.split(":", 1)[1].strip().strip("\"'") or None
+    return None
+
+
+def _settings_skill_entries(settings: dict, base: Path) -> list[Path]:
+    """`skills` array entries (files or dirs), resolved against the settings file's dir."""
+    out = []
+    for e in settings.get("skills", []):
+        if not isinstance(e, str):
+            continue
+        p = Path(os.path.expanduser(e))
+        out.append(p if p.is_absolute() else base / p)
+    return out
 
 
 def discover() -> list[Section]:
-    exts, skills, seen = Section("Extensions"), Section("Skills"), set()
-    proj = Section("Project skills")
+    exts, skills, proj = Section("Extensions"), Section("Skills"), Section("Project skills")
+    seen: set[str] = set()
+    loaded: set[Path] = set()  # real path of each skill file; pi's symlink dedupe
 
     def add(section, name, path):
         if name in seen:
@@ -77,14 +101,51 @@ def discover() -> list[Section]:
         seen.add(name)
         section.items.append(Item(name, path))
 
+    def add_skill(section, base: Path, file: str = "SKILL.md"):
+        skill_file = base / file
+        real = skill_file.resolve()
+        if real in loaded:
+            return  # same file already listed (e.g. via symlink); pi skips silently
+        loaded.add(real)
+        if file == "SKILL.md":
+            add(section, base.name, base)  # pi may rename via frontmatter; dir name is the spec default
+        else:  # ponytail: frontmatter name, stem fallback (pi falls back to the parent dir name)
+            add(section, _frontmatter_name(skill_file) or file[:-3], skill_file)
+
+    def scan_skills(section, base: Path, root_files: bool = False):
+        # ponytail: one level deep; pi also recurses into grouping folders
+        if not base.is_dir():
+            return
+        for p in sorted(base.iterdir()):
+            if p.is_dir() and (p / "SKILL.md").is_file():
+                add_skill(section, p)
+            elif root_files and p.is_file() and p.suffix == ".md":
+                add_skill(section, p.parent, p.name)
+
+    def add_settings_entry(section, e: Path):
+        if (e / "SKILL.md").is_file():
+            add_skill(section, e)
+        elif e.is_dir():
+            for p in sorted(e.iterdir()):
+                if p.is_dir() and (p / "SKILL.md").is_file():
+                    add_skill(section, p)
+        elif e.is_file() and e.suffix == ".md":
+            add_skill(section, e.parent, e.name)
+
+    # Load order follows pi so name-collision winners match:
+    # global dirs, project dirs, packages, settings. First one listed wins a name.
+    scan_skills(skills, PI_AGENT / "skills", root_files=True)
+    scan_skills(skills, Path.home() / ".agents" / "skills")
+    for d in _project_dirs():
+        scan_skills(proj, d / ".pi" / "skills", root_files=True)
+        scan_skills(proj, d / ".agents" / "skills")
+
     for d in sorted(_package_dirs(), key=lambda p: p.name):
         for cand in (d / "pi-extension" / "index.js", d / "index.ts", d / "index.js"):
             if cand.exists():
                 add(exts, d.name, cand)
                 break
-        for sk in sorted((d / "skills").iterdir()) if (d / "skills").is_dir() else []:
-            if (sk / "SKILL.md").exists():
-                add(skills, sk.name, sk)
+        scan_skills(skills, d / "skills")
 
     ext_dir = PI_AGENT / "extensions"
     if ext_dir.is_dir():
@@ -96,16 +157,17 @@ def discover() -> list[Section]:
             elif p.is_dir() and any(p.glob("index.*")):
                 add(exts, p.name, p)
 
-    skills_dir = PI_AGENT / "skills"
-    if skills_dir.is_dir():
-        for p in sorted(skills_dir.iterdir()):
-            if (p / "SKILL.md").exists():
-                add(skills, p.name, p)
-
-    for base in _project_skill_dirs():
-        for p in sorted(base.iterdir()):
-            if (p / "SKILL.md").exists():
-                add(proj, p.name, p)  # same name as a global skill: global wins, state is name-keyed
+    for e in _settings_skill_entries(_settings(), PI_AGENT):
+        add_settings_entry(skills, e)
+    for d in _project_dirs():
+        sp = d / ".pi" / "settings.json"
+        if sp.is_file():
+            try:
+                cfg = json.loads(sp.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            for e in _settings_skill_entries(cfg, d / ".pi"):
+                add_settings_entry(proj, e)
 
     opts = Section("Options", [Item(CONTEXT_OPT, None)])
     return [exts, skills, proj, opts]
