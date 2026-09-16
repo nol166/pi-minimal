@@ -24,11 +24,14 @@ Once you've launched once, `selections.json` takes over and the config file is i
 
 ## Where it looks
 
-Extensions and skills are discovered from three places:
+Extensions and skills are discovered from four places:
 
 - Packages listed in `~/.pi/agent/settings.json` (both `git:` and `npm:` sources). A package can ship an extension at its root or under `pi-extension/`, and any `skills/` directory inside it.
 - `~/.pi/agent/extensions/`, for standalone `.ts`/`.js` files and directories with an `index.*`. Files ending in `.disabled` are skipped.
 - `~/.pi/agent/skills/`, for skill folders with a `SKILL.md`.
+- Project skills: `.pi/skills/` and `.agents/skills/` in the current directory and each ancestor up to the repo root (or filesystem root), for skill folders with a `SKILL.md`. A project skill whose name matches a global skill is not listed separately; the global one wins.
+
+Note that project skills are discovered relative to where you *run* pi-minimal, so they only appear for the project you launch from.
 
 The agent directory defaults to `~/.pi/agent` and can be overridden with `PI_AGENT_DIR`. The state file location can be overridden with `PI_MINIMAL_STATE`.
 

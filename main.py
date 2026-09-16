@@ -53,8 +53,23 @@ def _package_dirs() -> list[Path]:
     return [d for d in out if d.is_dir()]
 
 
+def _project_skill_dirs() -> list[Path]:
+    """`.pi/skills` and `.agents/skills` from cwd up to the repo root (or filesystem root)."""
+    dirs, d = [], Path.cwd()
+    while True:
+        for sub in (".pi/skills", ".agents/skills"):
+            p = d / sub
+            if p.is_dir():
+                dirs.append(p)
+        if (d / ".git").exists() or d.parent == d:
+            break
+        d = d.parent
+    return dirs
+
+
 def discover() -> list[Section]:
     exts, skills, seen = Section("Extensions"), Section("Skills"), set()
+    proj = Section("Project skills")
 
     def add(section, name, path):
         if name in seen:
@@ -87,8 +102,13 @@ def discover() -> list[Section]:
             if (p / "SKILL.md").exists():
                 add(skills, p.name, p)
 
+    for base in _project_skill_dirs():
+        for p in sorted(base.iterdir()):
+            if (p / "SKILL.md").exists():
+                add(proj, p.name, p)  # same name as a global skill: global wins, state is name-keyed
+
     opts = Section("Options", [Item(CONTEXT_OPT, None)])
-    return [exts, skills, opts]
+    return [exts, skills, proj, opts]
 
 
 def _defaults() -> set[str]:
@@ -184,23 +204,26 @@ def _tui(stdscr) -> None:
     load_state(sections)
     flat = _flat(sections)
     cursor = next(i for i, it in enumerate(flat) if it.checked) if any(i.checked for i in flat) else 0
-    while True:
-        _draw(stdscr, sections, cursor)
-        key = stdscr.getkey()
-        if key in ("KEY_UP", "k"):
-            cursor = _move(sections, cursor, -1)
-        elif key in ("KEY_DOWN", "j"):
-            cursor = _move(sections, cursor, 1)
-        elif key == " ":
-            _toggle_at(sections, cursor, flat)
-        elif key == "KEY_ENTER" or key == "\n":
-            save_state(sections)
-            curses.endwin()  # leave curses mode
-            os.write(1, b"\x1b[2J\x1b[H")  # clear + home; endwin leaves cursor mid-line
-            os.execvp("pi", build_command(sections))
-        elif key == "q":
-            save_state(sections)
-            return
+    try:
+        while True:
+            _draw(stdscr, sections, cursor)
+            key = stdscr.getkey()
+            if key in ("KEY_UP", "k"):
+                cursor = _move(sections, cursor, -1)
+            elif key in ("KEY_DOWN", "j"):
+                cursor = _move(sections, cursor, 1)
+            elif key == " ":
+                _toggle_at(sections, cursor, flat)
+            elif key == "KEY_ENTER" or key == "\n":
+                save_state(sections)
+                curses.endwin()  # leave curses mode
+                os.write(1, b"\x1b[2J\x1b[H")  # clear + home; endwin leaves cursor mid-line
+                os.execvp("pi", build_command(sections))
+            elif key == "q":
+                save_state(sections)
+                return
+    except KeyboardInterrupt:
+        save_state(sections)  # same as q: keep the selection, exit cleanly
 
 
 def main() -> None:
