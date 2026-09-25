@@ -16,7 +16,7 @@ The first time you run pi-minimal (before `selections.json` exists), nothing is 
 
 ```json
 {
-  "default_checked": ["my-extension", "my-skill"]
+  "default_checked": []
 }
 ```
 
