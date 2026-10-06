@@ -6,38 +6,37 @@ A curses TUI for starting pi with only the extensions and skills you want. pi-mi
 
 By default pi discovers a lot: every extension in your agent directory, every skill, prompt templates, themes, context files, and anything shipped inside installed packages. pi-minimal launches pi with `--no-extensions --no-skills --no-prompt-templates --no-themes` so that nothing is discovered, then adds back only the items you checked: one `-e` flag per extension, one `--skill` flag per skill.
 
+`--no-extensions` also switches off pi's built-in extensions, so they get their own section: MCP (which is how your `mcp.json` servers run), llama.cpp, codemode, and tool-search. They start checked, which is what a plain `pi` launch gives you; uncheck one to actually drop it. Switching MCP off also turns off every MCP server.
+
 There is also a toggle for the AGENTS.md / CLAUDE.md context files. Leave it checked and pi runs normally; uncheck it and `--no-context-files` goes on the command line.
 
 Your pi `settings.json` is never touched. The selection list is saved to `~/.config/pi-minimal/selections.json`, and a plain `pi` launch afterwards behaves exactly as before.
 
-### Default selections
+### Selections file
 
-Before you have launched once, nothing is checked. To pre-check items, create `~/.config/pi-minimal/config.json` with a `default_checked` list of item names:
+The state file is a list of names: a plain name is checked, and a name prefixed with `-` records that you switched a default-on item (a built-in extension) off. So `["builtin:codemode", "ollama-lan"]` means codemode off, ollama-lan on.
 
-```json
-{
-  "default_checked": []
-}
-```
-
-Once `selections.json` exists, this file is ignored until you delete it.
+Before you have launched once, everything starts from what plain pi would load, plus a `default_checked` list of names you can put in `~/.config/pi-minimal/config.json`. Once `selections.json` exists it wins, and stays in control until you delete it.
 
 ## Where it looks
 
-Extensions and skills are discovered the same way pi does, in pi's load order:
+Discovery follows pi 1.0, in pi's load order, so a name that exists twice is listed where pi would load it:
 
-- `~/.pi/agent/skills/`: skill folders with a `SKILL.md`, plus bare `.md` files at the root that have skill frontmatter.
-- `~/.agents/skills/`: skill folders with a `SKILL.md`.
-- Project skills: `.pi/skills/` (folders, plus bare root `.md` files) and `.agents/skills/` (folders) in the current directory and each ancestor, up to the repo root or the filesystem root.
-- Packages listed in `~/.pi/agent/settings.json` (`git:` and `npm:` sources). A package can ship an extension at its root or under `pi-extension/`, and any `skills/` directory inside it is included.
-- The `skills` array in `~/.pi/agent/settings.json` and in project `.pi/settings.json` (relative entries resolve against the settings file's directory). An entry may be a skill folder, a directory of skill folders, or a single `.md` skill file.
-- `~/.pi/agent/extensions/`: standalone `.ts`/`.js` files and directories with an `index.*`. Files ending in `.disabled` are skipped.
+- Packages listed in `~/.pi/agent/settings.json` (`git:` and `npm:` sources). What a package ships comes from its `package.json` `pi` manifest (`extensions`, `skills`); without a manifest it is the conventional `extensions/` and `skills/` folders. A manifest directory expands to the files inside it, so `"./dist"` lists every `.js` in `dist/`, not a guessed `index.ts`.
+- Project skills: `.pi/skills/` in the current directory, and `.agents/skills/` in the current directory and each ancestor up to the repo root.
+- `~/.pi/agent/skills/` and `~/.agents/skills/`: folders with a `SKILL.md`, searched recursively (grouping folders are fine) and through symlinks.
+- The `skills` arrays in `~/.pi/agent/settings.json` and project `.pi/settings.json`: entries naming a skill folder, a folder of skills, or a `.md` file add those files. Relative entries resolve against the settings file's directory.
+- `~/.pi/agent/extensions/`: standalone `.ts`/`.js` files, and folders that resolve to their declared `pi.extensions` or to `index.ts`/`index.js`. Files ending in `.disabled` are skipped.
 
-Deduplication matches pi: a skill file reached more than once (for example through a symlink) is listed once, and if two different files share a name, the first location in the order above wins.
+Settings entries can also turn things off, and pi-minimal honours that instead of listing the item anyway: `-` excludes one exact path, `!` excludes a glob, and `+` puts a path back. A package entry can filter itself, e.g. `{"source": "npm:pi-web-access", "extensions": ["+index.ts"]}`.
 
-Project skills and project settings are discovered relative to where you run pi-minimal, so they only appear for the project you launch from.
+Deduplication matches pi: a skill file reached twice (through a symlink, or once by its package and once by the skills folder) is listed once, and extensions and skills are matched by name separately.
 
-The agent directory defaults to `~/.pi/agent` and can be overridden with `PI_AGENT_DIR`. The state file location can be overridden with `PI_MINIMAL_STATE`.
+Project skills and project settings are discovered relative to where you run pi-minimal, so they only appear for the project you launch from. pi only loads them in an untrusted project after you answer its trust prompt.
+
+The agent directory defaults to `~/.pi/agent` and is read from `PI_CODING_AGENT_DIR` (`PI_AGENT_DIR` still works), and is passed on to the pi it launches. The state file location can be overridden with `PI_MINIMAL_STATE`.
+
+Not covered yet: packages and extensions declared in a project's `.pi/settings.json`, and pinned package sources with a `@version` or `@ref` suffix.
 
 ## Usage
 
