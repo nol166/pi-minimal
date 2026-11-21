@@ -4,7 +4,7 @@ A curses TUI for starting pi with only the extensions and skills you want. pi-mi
 
 ## How it works
 
-By default pi discovers a lot: every extension in your agent directory, every skill, prompt templates, themes, context files, and anything shipped inside installed packages. pi-minimal launches pi with `--no-extensions --no-skills --no-prompt-templates --no-themes` so that nothing is discovered, then adds back only the items you checked: one `-e` flag per extension, one `--skill` flag per skill.
+By default pi discovers a lot: every extension in your agent directory, every skill, prompt templates, themes, context files, and anything shipped inside installed packages. pi-minimal launches pi with `--no-extensions --no-skills --no-prompt-templates --no-themes` so that nothing is discovered, then adds back only the items you checked: one `-e` flag per extension, one `--skill` flag per skill. Prompt templates and themes have no checkboxes: they are always off in a pi-minimal launch.
 
 `--no-extensions` also switches off pi's built-in extensions, so they get their own section: MCP (which is how your `mcp.json` servers run), llama.cpp, codemode, and tool-search. They start checked, which is what a plain `pi` launch gives you; uncheck one to actually drop it. Switching MCP off also turns off every MCP server.
 
@@ -16,7 +16,7 @@ Your pi `settings.json` is never touched. The selection list is saved to `~/.con
 
 The state file is a list of names: a plain name is checked, and a name prefixed with `-` records that you switched a default-on item (a built-in extension, or the context-files option) off. So `["builtin:codemode", "ollama-lan"]` means codemode off, ollama-lan on.
 
-Before you have launched once, everything starts from what plain pi would load, plus a `default_checked` list of names you can put in `~/.config/pi-minimal/config.json`. Once `selections.json` exists it wins, and stays in control until you delete it.
+Before you have launched once, only the built-in extensions (as your pi settings leave them) and the context-files option start ticked; extensions and skills start unticked, plus whatever you name in a `default_checked` list in `~/.config/pi-minimal/config.json`. If you run pi inside herdr, put `herdr-agent-state` there, or herdr cannot see whether pi is working. Once `selections.json` exists it wins, and stays in control until you delete it.
 
 ## Where it looks
 

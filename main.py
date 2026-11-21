@@ -21,7 +21,6 @@ from pathlib import Path
 PI_AGENT = Path(os.environ.get("PI_CODING_AGENT_DIR") or os.environ.get("PI_AGENT_DIR", "~/.pi/agent")).expanduser()
 STATE_FILE = Path(os.environ.get("PI_MINIMAL_STATE", "~/.config/pi-minimal/selections.json")).expanduser()
 CODE_EXTS = {".ts", ".js"}
-CONFIG_FILE = STATE_FILE.parent / "config.json"
 CONTEXT_OPT = "AGENTS.md / CLAUDE.md context files"
 SKIP_DIRS = {"node_modules"}
 # Loaded by default in plain pi; --no-extensions kills them, -e builtin:<name> brings one back.
@@ -529,9 +528,15 @@ def discover() -> list[Section]:
     return [builtins, exts, skills, proj, opts]
 
 
+def _config_file() -> Path:
+    """config.json beside the state file, looked up at call time so it follows STATE_FILE
+    (tests that point STATE_FILE at a temp dir no longer read the real config)."""
+    return STATE_FILE.parent / "config.json"
+
+
 def _defaults() -> set[str]:
     try:
-        cfg = json.loads(CONFIG_FILE.read_text())
+        cfg = json.loads(_config_file().read_text())
         return set(cfg.get("default_checked", []))
     except (OSError, json.JSONDecodeError):
         return set()
@@ -657,14 +662,8 @@ def _move(sections, cursor, delta) -> int:
     return (cursor + delta) % len(flat)
 
 
-def _toggle_at(sections, cursor, flat) -> None:
-    n = 0
-    for sec in sections:
-        for it in sec.items:
-            if n == cursor:
-                it.checked = not it.checked
-                return
-            n += 1
+def _toggle_at(flat, cursor) -> None:
+    flat[cursor].checked = not flat[cursor].checked
 
 
 def _child_env() -> dict:
@@ -690,12 +689,16 @@ def _tui(stdscr) -> None:
             elif key in ("KEY_DOWN", "j"):
                 cursor = _move(sections, cursor, 1)
             elif key == " ":
-                _toggle_at(sections, cursor, flat)
+                _toggle_at(flat, cursor)
             elif key == "KEY_ENTER" or key == "\n":
                 save_state(sections)
                 curses.endwin()  # leave curses mode
                 os.write(1, b"\x1b[2J\x1b[H")  # clear + home; endwin leaves cursor mid-line
-                os.execvpe("pi", build_command(sections), _child_env())
+                try:
+                    os.execvpe("pi", build_command(sections), _child_env())
+                except FileNotFoundError:
+                    sys.exit("pi-minimal: `pi` is not on PATH. Your selection was saved; "
+                             "run `uv run main.py --list` for the command.")
             elif key == "q":
                 save_state(sections)
                 return
