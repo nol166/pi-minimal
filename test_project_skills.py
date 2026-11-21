@@ -285,6 +285,83 @@ def test_state_remembers_switching_a_builtin_off():
             main.STATE_FILE = old_state
 
 
+def test_context_option_off_survives_save():
+    """The context-files toggle is default-on, so unchecking it must be written as '-name'."""
+    with tempfile.TemporaryDirectory() as t:
+        t = Path(t).resolve()
+        agent, cwd = t / "agent", t / "work"
+        agent.mkdir()
+        cwd.mkdir()
+        state = t / "selections.json"
+        old_state = main.STATE_FILE
+        main.STATE_FILE = state
+        try:
+            with _sandbox(t, cwd, agent):
+                sections = main.discover()
+                _items(sections, "Options")[main.CONTEXT_OPT].checked = False
+                main.save_state(sections)
+                assert f"-{main.CONTEXT_OPT}" in json.loads(state.read_text()), state.read_text()
+
+                fresh = main.discover()
+                main.load_state(fresh)
+                assert not _items(fresh, "Options")[main.CONTEXT_OPT].checked
+                assert "--no-context-files" in main.build_command(fresh), main.build_command(fresh)
+        finally:
+            main.STATE_FILE = old_state
+
+
+def test_save_keeps_names_that_are_not_discovered_now():
+    """The state file is global; names of items missing here stay for when they come back."""
+    with tempfile.TemporaryDirectory() as t:
+        t = Path(t).resolve()
+        agent, cwd = t / "agent", t / "work"
+        (cwd / ".git").mkdir(parents=True)
+        _make_skill(agent, "skills/keep-skill")
+        _make_skill(agent, "skills/drop-skill")
+        state = t / "selections.json"
+        state.write_text(json.dumps(["elsewhere-skill", "drop-skill"]))
+        old_state = main.STATE_FILE
+        main.STATE_FILE = state
+        try:
+            with _sandbox(t, cwd, agent):
+                sections = main.discover()
+                main.load_state(sections)
+                skills = _items(sections, "Skills")
+                assert skills["drop-skill"].checked and not skills["keep-skill"].checked, skills
+                skills["keep-skill"].checked = True
+                skills["drop-skill"].checked = False
+                main.save_state(sections)
+        finally:
+            main.STATE_FILE = old_state
+        saved = json.loads(state.read_text())
+        assert "elsewhere-skill" in saved, saved
+        assert "keep-skill" in saved, saved
+        assert "drop-skill" not in saved, saved  # current items follow today's boxes
+
+
+def test_stale_opt_out_for_a_current_item_is_dropped():
+    """Today's checkbox wins for an item that is listed now; unknown entries are kept."""
+    with tempfile.TemporaryDirectory() as t:
+        t = Path(t).resolve()
+        agent, cwd = t / "agent", t / "work"
+        (cwd / ".git").mkdir(parents=True)
+        agent.mkdir()
+        state = t / "selections.json"
+        state.write_text(json.dumps(["-builtin:mcp", "-elsewhere"]))
+        old_state = main.STATE_FILE
+        main.STATE_FILE = state
+        try:
+            with _sandbox(t, cwd, agent):
+                sections = main.discover()  # no load_state: builtin:mcp is ticked here
+                assert _items(sections, "Built-in")["builtin:mcp"].checked
+                main.save_state(sections)
+        finally:
+            main.STATE_FILE = old_state
+        saved = json.loads(state.read_text())
+        assert "builtin:mcp" in saved and "-builtin:mcp" not in saved, saved
+        assert "-elsewhere" in saved, saved
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

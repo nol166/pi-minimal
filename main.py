@@ -358,7 +358,7 @@ def discover() -> list[Section]:
     builtin_scopes = project_ext + [(user.get("extensions", []), PI_AGENT)]
     builtins = Section("Built-in",
                        [Item(name, [name], _on(Path(name), builtin_scopes), True) for name in BUILTIN_EXTS], "-e")
-    opts = Section("Options", [Item(CONTEXT_OPT, [], True)])
+    opts = Section("Options", [Item(CONTEXT_OPT, [], True, True)])
     return [builtins, exts, skills, proj, opts]
 
 
@@ -370,11 +370,18 @@ def _defaults() -> set[str]:
         return set()
 
 
-def load_state(sections) -> None:
+def _saved() -> list[str]:
+    """Names recorded in the state file: [] when there is none, it cannot be read, or it is
+    not a JSON list of strings."""
     try:
-        saved = set(json.loads(STATE_FILE.read_text()))
+        saved = json.loads(STATE_FILE.read_text())
     except (OSError, json.JSONDecodeError):
-        saved = _defaults()
+        return []
+    return saved if isinstance(saved, list) and all(isinstance(v, str) for v in saved) else []
+
+
+def load_state(sections) -> None:
+    saved = set(_saved()) or _defaults()  # no state yet (or nothing usable in it): config defaults
     for sec in sections:
         for it in sec.items:
             if it.name in saved:
@@ -383,11 +390,20 @@ def load_state(sections) -> None:
                 it.checked = False  # opt-out recorded by save_state for a default-on item
 
 
+def _entry_item(name: str) -> str:
+    """The item a state-file entry refers to: the entry without its one leading '-'."""
+    return name[1:] if name.startswith("-") else name
+
+
 def save_state(sections) -> None:
+    """Record today's checkboxes, keeping entries for items that are not discovered right now
+    (a project skill from another directory, a package that is temporarily missing)."""
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    current = {it.name for sec in sections for it in sec.items}
     names = [it.name for sec in sections for it in sec.items if it.checked]
     names += [f"-{it.name}" for sec in sections for it in sec.items if it.default and not it.checked]
-    STATE_FILE.write_text(json.dumps(sorted(names)))
+    names += [n for n in _saved() if _entry_item(n) not in current]
+    STATE_FILE.write_text(json.dumps(sorted(set(names))))
 
 
 def build_command(sections) -> list[str]:

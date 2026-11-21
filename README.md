@@ -14,7 +14,7 @@ Your pi `settings.json` is never touched. The selection list is saved to `~/.con
 
 ### Selections file
 
-The state file is a list of names: a plain name is checked, and a name prefixed with `-` records that you switched a default-on item (a built-in extension) off. So `["builtin:codemode", "ollama-lan"]` means codemode off, ollama-lan on.
+The state file is a list of names: a plain name is checked, and a name prefixed with `-` records that you switched a default-on item (a built-in extension, or the context-files option) off. So `["builtin:codemode", "ollama-lan"]` means codemode off, ollama-lan on.
 
 Before you have launched once, everything starts from what plain pi would load, plus a `default_checked` list of names you can put in `~/.config/pi-minimal/config.json`. Once `selections.json` exists it wins, and stays in control until you delete it.
 
@@ -59,4 +59,4 @@ The bottom of the screen shows the exact `pi` command that will run, updating as
 ## Notes
 
 - The launch is an `exec`, so pi replaces the pi-minimal process; quitting pi returns you to your shell.
-- If an item you once checked disappears (package removed, file renamed), its name stays in the state file harmlessly until you toggle something else.
+- If an item you once checked disappears (package removed, file renamed, or a project skill in another directory), its name stays in the state file, so the item comes back ticked when it is found again (for example a project skill when you return to that project).
