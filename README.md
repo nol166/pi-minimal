@@ -34,10 +34,10 @@ pi-minimal lists all of it on one screen. Tick what this session needs and press
 Needs [pi](https://github.com/earendil-works/pi), Python 3.10+ and [uv](https://docs.astral.sh/uv/). macOS and Linux.
 
 ```sh
-uv tool install git+https://github.com/nol166/pi-minimal
+uv tool install pi-minimal
 ```
 
-Or try it without installing: `uvx --from git+https://github.com/nol166/pi-minimal pi-minimal`
+Or try it without installing: `uvx pi-minimal`. With pip: `pipx install pi-minimal`.
 
 ## Usage
 
