@@ -2,18 +2,20 @@
 """pi-minimal: pick which pi extensions/skills to load, then launch pi stripped down.
 
 --no-extensions/--no-skills/etc stop pi discovering anything, then the checked items go
-back on the command line as -e / --skill. Discovery mirrors pi 1.0 (see package-manager.js):
-package manifests and filters, the +/-/! prefixes in resource arrays, and the built-in
-extensions that --no-extensions switches off too.
+back on the command line as -e / --skill. Discovery mirrors pi 1.6.0 (see package-manager.js):
+package manifests and directory resolution, the +/-/! prefixes in resource arrays, per-scope
+filtering, and the built-in extensions that --no-extensions switches off too.
 """
 
 import curses
-import fnmatch
+import glob
 import json
 import os
+import re
 import shlex
 import sys
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 PI_AGENT = Path(os.environ.get("PI_CODING_AGENT_DIR") or os.environ.get("PI_AGENT_DIR", "~/.pi/agent")).expanduser()
@@ -88,25 +90,21 @@ def _project_settings() -> list[tuple[Path, dict]]:
 
 
 # --- pi's resource-list syntax -------------------------------------------------------------
-# An entry is a path or glob to include, or is prefixed: '+' force-include, '-' exclude one
-# exact path, '!glob' exclude a glob. Relative entries resolve against the settings file's
-# directory, a package root, or a skills directory.
+# An entry is a path or a glob to include, or is prefixed: '+' force-include (exact path),
+# '-' exclude one exact path, '!glob' exclude a glob. Relative entries resolve against the
+# settings file's directory, a package root, or a skills directory.
 
 
-def _split(values) -> tuple[list[str], list[str], list[str]]:
-    """Split a resource array into (plain, '+' includes, '-'/'!' excludes), prefixes stripped."""
-    plain, plus, drops = [], [], []
+def _split(values) -> tuple[list[str], list[str], list[str], list[str]]:
+    """Split a resource array into (plain, '+', '!', '-') entries, prefixes stripped."""
+    plain, plus, bangs, minus = [], [], [], []
     for v in values if isinstance(values, list) else []:
         if not isinstance(v, str) or not v.strip():
             continue
         v = v.strip()
-        target = plus if v[0] == "+" else drops if v[0] in "-!" else plain
+        target = {"+": plus, "-": minus, "!": bangs}.get(v[0], plain)
         target.append(v[1:] if v[0] in "+-!" else v)
-    return plain, plus, drops
-
-
-def _is_pattern(entry: str) -> bool:
-    return entry.startswith(("+", "-", "!")) or "*" in entry or "?" in entry
+    return plain, plus, bangs, minus
 
 
 def _is_filter(entry: str) -> bool:
@@ -114,71 +112,164 @@ def _is_filter(entry: str) -> bool:
     return entry.startswith(("+", "-", "!"))
 
 
+def _is_pattern(entry: str) -> bool:
+    return _is_filter(entry) or "*" in entry or "?" in entry
+
+
+def _glob_seg(seg: str) -> str:
+    """One path segment of a glob as a regex; '*' and '?' never cross a '/'."""
+    out, j = [], 0
+    while j < len(seg):
+        c = seg[j]
+        if c == "*":
+            out.append("[^/]*")
+        elif c == "?":
+            out.append("[^/]")
+        elif c == "[" and "]" in seg[j + 1:]:
+            end = seg.index("]", j + 1)
+            body = seg[j + 1:end]
+            neg = body[:1] in ("!", "^")
+            out.append(f"[{'^' if neg else ''}{re.escape(body[1:] if neg else body)}]")
+            j = end
+        else:
+            out.append(re.escape(c))
+        j += 1
+    return ("(?!\\.)" if seg[:1] in "*?[" else "") + "".join(out)  # a wildcard never matches a dot
+
+
+@lru_cache(maxsize=None)
+def _glob(pattern: str) -> re.Pattern:
+    """minimatch semantics: a '**' segment crosses '/' and may stand for no segment at all
+    ('a/**/b' matches 'a/b'), a trailing 'a/**' needs at least one file under 'a/'. Cached."""
+    out, need_sep, segs = "", False, pattern.split("/")
+    for i, seg in enumerate(segs):
+        if seg == "**" and i < len(segs) - 1:
+            out += ("/" if need_sep else "") + "(?:[^/]+/)*"  # the group carries the next separator
+            need_sep = False
+            continue
+        out += ("/" if need_sep else "") + ("[^/]+(?:/.*)?" if seg == "**" else _glob_seg(seg))
+        need_sep = True
+    return re.compile(out + r"\Z")
+
+
+def _rel(path: Path, base: Path) -> str | None:
+    """`path` relative to `base` (pi's relative(), so '../..' when outside it); nothing for the
+    synthetic 'builtin:...' entries, which are not paths at all."""
+    return Path(os.path.relpath(path, base)).as_posix() if path.is_absolute() else None
+
+
 def _keys(path: Path, base: Path) -> list[str]:
-    """Names pi matches a resource against: absolute, file name, relative to `base`, and for
-    a SKILL.md also its parent directory, so '-skills/foo' hits 'skills/foo/SKILL.md'."""
+    """What pi's matchesAnyPattern tries a glob against: the absolute path, the file name, the
+    path relative to the base dir and, for a SKILL.md, those three for its folder as well."""
     keys = [str(path), path.name]
-    try:
-        keys.append(path.relative_to(base).as_posix())
-    except ValueError:
-        pass
+    rel = _rel(path, base)
+    if rel is not None:
+        keys.append(rel)
     if path.name == "SKILL.md":
         keys += _keys(path.parent, base)
     return keys
 
 
+def _exact_keys(path: Path, base: Path) -> list[str]:
+    """What '+'/'-' are compared with (pi's matchesAnyExactPattern): only the relative path or
+    the absolute path, plus the folder's two for a SKILL.md. Never a bare file name."""
+    keys = [str(path)]
+    rel = _rel(path, base)
+    if rel is not None:
+        keys.append(rel)
+    if path.name == "SKILL.md":
+        keys += _exact_keys(path.parent, base)
+    return keys
+
+
 def _hit(keys: list[str], patterns: list[str]) -> bool:
-    return any(fnmatch.fnmatch(key, pattern.removeprefix("./")) for pattern in patterns for key in keys)
+    """Glob match, like pi's matchesAnyPattern (a leading '~' is expanded in a pattern)."""
+    return any(_glob(os.path.expanduser(p)).match(key) for p in patterns for key in keys)
 
 
-def _on(path: Path, scopes: list[tuple[list[str], Path]]) -> bool:
-    """Is an auto-discovered resource enabled? The first scope that mentions it decides, so
-    project settings override user settings, matching pi's isEnabledByOverrides."""
-    for patterns, base in scopes:
-        _, plus, drops = _split(patterns)
-        keys = _keys(path, base)
-        if _hit(keys, drops) or _hit(keys, plus):
-            return not _hit(keys, drops)
-    return True
+def _hit_exact(keys: list[str], patterns: list[str]) -> bool:
+    """Exact match, no globbing: pi only strips a leading './' (and expands a leading '~')."""
+    for p in patterns:
+        p = os.path.expanduser(p)
+        if (p[2:] if p.startswith("./") else p) in keys:
+            return True
+    return False
+
+
+def _on(path: Path, values, base: Path) -> bool:
+    """Is an auto-discovered resource enabled? pi's isEnabledByOverrides: '!' globs disable,
+    then '+' (exact) puts one back, and '-' (exact) has the last word."""
+    _, plus, bangs, minus = _split(values)
+    enabled = not (bangs and _hit(_keys(path, base), bangs))
+    if plus and _hit_exact(_exact_keys(path, base), plus):
+        enabled = True
+    if minus and _hit_exact(_exact_keys(path, base), minus):
+        enabled = False
+    return enabled
+
+
+def _override_state(path: Path, values, base: Path) -> bool | None:
+    """pi's applyAutoloadDisabledPatterns: the last '!', '+' or '-' entry mentioning the path
+    decides (only '+' enables); None when no override mentions it, so the caller decides."""
+    state = None
+    for v in values if isinstance(values, list) else []:
+        if not isinstance(v, str) or not v.strip() or v[0] not in "+-!":
+            continue
+        v = v.strip()
+        exact = v[0] in "+-"
+        keys = _exact_keys(path, base) if exact else _keys(path, base)
+        if (_hit_exact(keys, [v[1:]]) if exact else _hit(keys, [v[1:]])):
+            state = v[0] == "+"
+    return state
 
 
 def _narrow(files: list[Path], patterns, base: Path) -> list[Path]:
-    """Filter a package's resources (pi's applyPatterns): plain entries narrow the list,
-    '-'/'!' remove, '+' restores what a removal took out."""
-    plain, plus, drops = _split(patterns)
+    """Filter a resource list the way pi's applyPatterns does: plain entries narrow it, '!'
+    removes, '+' restores from the original list, and '-' (exact) removes last of all."""
+    plain, plus, bangs, minus = _split(patterns)
+    result = list(files)
     if plain:
-        files = [f for f in files if _hit(_keys(f, base), plain)]
-    kept = [f for f in files if not _hit(_keys(f, base), drops)]
+        result = [f for f in result if _hit(_keys(f, base), plain)]
+    if bangs:
+        result = [f for f in result if not _hit(_keys(f, base), bangs)]
     if plus:
-        kept += [f for f in files if f not in kept and _hit(_keys(f, base), plus)]
-    return kept
+        wanted = {f for f in files if _hit_exact(_exact_keys(f, base), plus)}
+        result += [f for f in files if f not in result and f in wanted]
+    if minus:
+        result = [f for f in result if not _hit_exact(_exact_keys(f, base), minus)]
+    return result
 
 
 # --- discovery -----------------------------------------------------------------------------
 
 
+def _from_base(entry: str, base: Path) -> Path:
+    """A resource entry as a path: a relative one resolves against `base`, which is the settings
+    file's own directory, a package root or a skills dir - never another scope's directory.
+    (normpath so "../x" entries do not end up as "<dir>/.pi/../x" on the command line.)"""
+    path = Path(os.path.expanduser(entry))
+    return Path(os.path.normpath(path if path.is_absolute() else base / path))
+
+
 def _expand(values, base: Path) -> list[Path]:
-    """Resolve declared paths/globs against `base`; unlike filters these add resources."""
+    """Resolve declared manifest paths/globs against `base`; unlike filters these add resources."""
     out = []
     for value in values:
-        path = Path(os.path.expanduser(value))
-        if not path.is_absolute():
-            path = base / path
-        out += sorted(path.parent.glob(path.name)) if set("*?") & set(value) else [path]
+        path = _from_base(value, base)
+        if set("*?") & set(value):
+            out += [Path(p) for p in sorted(glob.glob(str(path), recursive="**" in value))]
+        else:
+            out.append(path)
     return out
 
 
-def _resolved_dir(d: Path) -> list[Path]:
-    """What one directory contributes: declared `pi.extensions`, else index.ts/index.js."""
-    declared = _manifest(d).get("extensions", [])
-    if declared:
-        paths = _expand([e for e in declared if not _is_filter(e)], d)
-        if paths:
-            return _narrow(_resource_files(paths, "extensions"), [e for e in declared if _is_filter(e)], d)
-    for name in ("index.ts", "index.js"):
-        if (d / name).is_file():
-            return [d / name]
-    return []
+def _listdir(base: Path) -> list[Path]:
+    """A directory's contents in pi's order: sorted, without dot entries and node_modules."""
+    try:
+        entries = sorted(base.iterdir())
+    except OSError:
+        return []
+    return [e for e in entries if not e.name.startswith(".") and e.name not in SKIP_DIRS]
 
 
 def _manifest(path: Path) -> dict:
@@ -190,12 +281,51 @@ def _manifest(path: Path) -> dict:
     return manifest if isinstance(manifest, dict) else {}
 
 
+def _manifest_entries(path: Path, kind: str) -> list[str] | None:
+    """One `pi` manifest array, or None when the package does not declare that resource kind;
+    pi then falls back to the conventional <package>/<kind>/ folder."""
+    entries = _manifest(path).get(kind)
+    if isinstance(entries, list) and all(isinstance(e, str) for e in entries):
+        return entries
+    return None
+
+
+def _resolved_dir(d: Path) -> list[Path] | None:
+    """What one directory resolves to (pi's resolveExtensionEntries): the declared
+    `pi.extensions` entries that exist, else index.ts, else index.js, else None, which means
+    the caller should look inside the directory instead."""
+    declared = _manifest_entries(d, "extensions")
+    if declared:
+        paths = [p for e in declared if not _is_filter(e) for p in [_from_base(e, d)] if p.exists()]
+        if paths:  # pi returns these as they are; whoever collects the folder expands a directory
+            return paths
+    for name in ("index.ts", "index.js"):
+        if (d / name).is_file():
+            return [d / name]
+    return None
+
+
+def _collect_ext_dir(base: Path) -> list[Path]:
+    """Collect an extensions directory (pi's collectAutoExtensionEntries): the directory's own
+    resolution if it has one, else its loose .ts/.js files plus each subdirectory's resolution."""
+    own = _resolved_dir(base)
+    if own:
+        return own
+    out = []
+    for entry in _listdir(base):
+        if entry.is_file() and entry.suffix in CODE_EXTS:
+            out.append(entry)
+        elif entry.is_dir():
+            out += _resolved_dir(entry) or []
+    return out
+
+
 def _resource_files(paths, kind: str) -> list[Path]:
-    """Expand candidate paths into resource files: a file is itself, a directory is walked."""
+    """Expand candidate paths into resource files: a file is itself, a directory is collected."""
     out = []
     for path in paths:
         if path.is_dir():
-            out += _skill_files(path) if kind == "skills" else _code_files(path)
+            out += _skill_files(path) if kind == "skills" else _collect_ext_dir(path)
         elif path.is_file() and path.suffix in ((".md",) if kind == "skills" else CODE_EXTS):
             out.append(path)
     return out
@@ -224,24 +354,13 @@ def _skill_files(base: Path, seen: set[str] | None = None) -> list[Path]:
     return out
 
 
-def _code_files(base: Path) -> list[Path]:
-    """Code files pi picks up inside a directory: loose .ts/.js here, plus each subdir's own entry."""
-    out = []
-    for path in sorted(base.iterdir()):
-        if path.name in SKIP_DIRS or path.name.startswith("."):
-            continue
-        if path.is_file() and path.suffix in CODE_EXTS:
-            out.append(path)
-        elif path.is_dir():
-            out += _resolved_dir(path)
-    return out
-
-
 def _entry_files(entry: Path) -> list[Path]:
     """One entry of an extensions directory: a code file, or what its directory resolves to."""
     if entry.is_file():
         return [entry] if entry.suffix in CODE_EXTS else []
-    return _resolved_dir(entry) if entry.is_dir() else []
+    if entry.is_dir():
+        return _resolved_dir(entry) or []
+    return []
 
 
 def _packages() -> list[tuple[Path, dict]]:
@@ -265,10 +384,9 @@ def _packages() -> list[tuple[Path, dict]]:
 
 def _package_resources(pkg: Path, filters: dict) -> tuple[list[Path], list[Path]]:
     """(extensions, skills) a package loads, with manifest and settings filters applied."""
-    manifest = _manifest(pkg) if pkg.is_dir() else {}
     ext_files, skill_files = [], []
     for kind, sink in (("extensions", ext_files), ("skills", skill_files)):
-        declared = manifest.get(kind)
+        declared = _manifest_entries(pkg, kind) if pkg.is_dir() else None
         if declared is None:  # no manifest: the conventional <package>/<kind>/ directory
             roots = [pkg] if pkg.is_file() else [pkg / kind]
             files = _resource_files([r for r in roots if r.exists()], kind)
@@ -283,82 +401,130 @@ def discover() -> list[Section]:
     exts = Section("Extensions", flag="-e")
     skills = Section("Skills", flag="--skill")
     proj = Section("Project skills", flag="--skill")
-    seen: dict[str, set[str]] = {"-e": set(), "--skill": set()}  # pi dedupes extensions and skills separately
+    skill_names: set[str] = set()  # skill items offered so far; pi loads one name once, project first
     keys: set[str] = set()  # state-file names, one per item
-    loaded: set[Path] = set()  # real SKILL.md paths; pi loads a file once, symlink or not
+    offered: set[str] = set()  # real paths already offered as extensions; pi dedupes by path
+    loaded: set[str] = set()  # real SKILL.md paths; pi loads a file once, symlink or not
 
     def add(section, name, args):
-        if name in seen[section.flag]:
-            return
-        seen[section.flag].add(name)
-        # a package can ship an extension and a skill of the same name; separate keys keep
-        # their checkboxes independent in the state file
-        key = name if name not in keys else f"{name} ({section.name})"
+        """Offer one item. State keys stay unique: '<name> (<section>)', then '<name> (<section>) 2'."""
+        key = name
+        if key in keys:
+            key = f"{name} ({section.name})"
+            n = 1
+            while key in keys:
+                n += 1
+                key = f"{name} ({section.name}) {n}"
         keys.add(key)
         section.items.append(Item(key, [str(a) for a in args]))
 
-    def add_skill(section, unit: Path, scopes):
-        if unit.resolve() in loaded or not _on(unit, scopes):
+    def add_ext(name: str, files: list[Path]) -> None:
+        """One extensions item, listing only the files it contributes. pi dedupes extensions by
+        resolved path, so a file already offered is dropped and two files sharing a name stay."""
+        keep = [f for f in files if str(f.resolve()) not in offered]
+        if not keep:
             return
-        loaded.add(unit.resolve())
-        if unit.name == "SKILL.md":
-            add(section, unit.parent.name, [unit.parent])
-        else:
-            add(section, _frontmatter_name(unit) or unit.stem, [unit])
+        offered.update(str(f.resolve()) for f in keep)
+        add(exts, name, keep)
+
+    def add_skill(section, unit: Path, values, base: Path) -> None:
+        real = str(unit.resolve())
+        if real in loaded or not _on(unit, values, base):
+            return
+        loaded.add(real)
+        in_folder = unit.name == "SKILL.md"
+        name = unit.parent.name if in_folder else (_frontmatter_name(unit) or unit.stem)
+        if name in skill_names:  # pi keeps the first resource of a name; project ones come first
+            return
+        skill_names.add(name)
+        add(section, name, [unit.parent if in_folder else unit])
+
+    def scan_skills(scan: Path, base: Path, section, values) -> None:
+        """A skills directory: every SKILL.md in it, filtered by that scope's own settings array."""
+        for unit in _resource_files([scan], "skills"):
+            add_skill(section, unit, values, base)
+
+    def declare_skills(values, base: Path, section) -> None:
+        """A settings `skills` array adds what its plain entries name (pi's resolveLocalEntries);
+        its patterns only narrow the files those entries brought in."""
+        if not isinstance(values, list):
+            return
+        units = [u for e in _split(values)[0] for u in _resource_files([_from_base(e, base)], "skills")]
+        keep = set(_narrow(units, [e for e in values if _is_pattern(e)], base))
+        for unit in units:
+            if unit in keep:
+                add_skill(section, unit, [], base)
+
+    def scan_ext_dir(scan: Path, values, base: Path) -> None:
+        """An auto-discovered extensions directory: one item per entry, listing its enabled files,
+        so a folder with some files switched off is still offered with the rest."""
+        for entry in _listdir(scan):
+            if entry.name.endswith(".disabled"):
+                continue
+            files = [f for f in _entry_files(entry) if _on(f, values, base)]
+            add_ext(entry.stem if entry.is_file() else entry.name, files)
+
+    def declare_ext(values, base: Path) -> None:
+        """A settings `extensions` array adds extensions the same way a `skills` array adds skills."""
+        if not isinstance(values, list):
+            return
+        units = []  # (item name, file), in entry order
+        for entry in _split(values)[0]:
+            path = _from_base(entry, base)
+            name = path.stem if path.is_file() else path.name
+            units += [(name, f) for f in _resource_files([path], "extensions")]
+        keep = set(_narrow([f for _, f in units], [e for e in values if _is_pattern(e)], base))
+        grouped: dict[str, list[Path]] = {}
+        for name, path in units:
+            if path in keep:
+                grouped.setdefault(name, []).append(path)
+        for name, files in grouped.items():
+            add_ext(name, files)
 
     user = _settings()
     projects = _project_settings()
     cwd = Path.cwd()
-    # pi keeps one project settings object; the nearest .pi wins and its directory is the
-    # base for relative entries there.
+    # pi keeps one project settings object; the nearest .pi wins, and its directory is the base
+    # for the relative entries there. User entries resolve against the agent dir, never ~/.agents.
     project_cfg = projects[0][1] if projects else {}
+    project_base = cwd / ".pi"
+    user_ext, user_skills = user.get("extensions", []), user.get("skills", [])
+    project_ext, project_skills = project_cfg.get("extensions", []), project_cfg.get("skills", [])
+    user_agents = Path.home() / ".agents" / "skills"
 
-    def declare(entries, base, section, scopes):
-        """Settings entries that name a path or glob add whatever they point at."""
-        for entry in entries:
-            if not isinstance(entry, str) or _is_filter(entry):
-                continue
-            # normpath so "../x" entries do not end up as "<dir>/.pi/../x" on the command line
-            path = Path(os.path.normpath(os.path.join(base, os.path.expanduser(entry))))
-            for unit in _resource_files([path], "skills"):
-                add_skill(section, unit, scopes)
+    def builtin_on(name: str) -> bool:
+        """A built-in is on unless the user settings switch it off; a project override decides first."""
+        state = _override_state(Path(name), project_ext, project_base)
+        return _on(Path(name), user_ext, PI_AGENT) if state is None else state
 
     # Order matches pi: packages, then project, then user, so a name collision drops the
     # same loser here as in pi. Project resources also need pi's project trust to load.
     for pkg, filters in _packages():
         pkg_ext, pkg_skills = _package_resources(pkg, filters)
-        if pkg_ext:
-            add(exts, pkg.name, pkg_ext)
+        add_ext(pkg.name, pkg_ext)
         for unit in pkg_skills:
-            add_skill(skills, unit, [])
+            add_skill(skills, unit, [], PI_AGENT)
 
-    project_patterns = project_cfg.get("skills", [])
-    user_patterns = user.get("skills", [])
-    # Each source: where to look, the directory relative settings paths resolve against, the
-    # section it lands in, and the resource array that filters it.
-    sources = [(cwd / ".pi" / "skills", cwd / ".pi", proj, project_patterns)]
-    sources += [(d / ".agents" / "skills", d / ".agents", proj, project_patterns) for d in _project_dirs()]
-    sources += [(PI_AGENT / "skills", PI_AGENT, skills, user_patterns),
-                (Path.home() / ".agents" / "skills", Path.home() / ".agents", skills, user_patterns)]
-    for scan, base, section, patterns in sources:
-        for unit in _resource_files([scan], "skills"):
-            add_skill(section, unit, [(patterns, base)])
-        declare(patterns, base, section, [(patterns, base)])
+    # Extensions: what the settings arrays name, then the auto-discovered directories, project
+    # scope before user scope. Each scope filters only its own resources.
+    declare_ext(project_ext, project_base)
+    scan_ext_dir(project_base / "extensions", project_ext, project_base)
+    declare_ext(user_ext, PI_AGENT)
+    scan_ext_dir(PI_AGENT / "extensions", user_ext, PI_AGENT)
 
-    project_ext = [(cfg.get("extensions", []), dir_ / ".pi") for dir_, cfg in projects]
-    ext_dir = PI_AGENT / "extensions"
-    if ext_dir.is_dir():
-        scopes = project_ext + [(user.get("extensions", []), PI_AGENT)]
-        for entry in sorted(ext_dir.iterdir()):
-            if entry.name.endswith(".disabled") or entry.name.startswith("."):
-                continue
-            files = _entry_files(entry)
-            if files and all(_on(f, scopes) for f in files):
-                add(exts, entry.stem if entry.is_file() else entry.name, files)
+    # Skills: <cwd>/.pi/skills and the .agents/skills directories up to the repo root are project
+    # resources (project settings, each with its own base); the agent and ~/.agents ones are user ones.
+    scan_skills(project_base / "skills", project_base, proj, project_skills)
+    declare_skills(project_skills, project_base, proj)
+    for d in _project_dirs():
+        scan = d / ".agents" / "skills"
+        if scan.resolve() != user_agents.resolve():  # that one is a user resource, filtered by user settings
+            scan_skills(scan, d / ".agents", proj, project_skills)
+    scan_skills(PI_AGENT / "skills", PI_AGENT, skills, user_skills)
+    declare_skills(user_skills, PI_AGENT, skills)
+    scan_skills(user_agents, user_agents.parent, skills, user_skills)
 
-    builtin_scopes = project_ext + [(user.get("extensions", []), PI_AGENT)]
-    builtins = Section("Built-in",
-                       [Item(name, [name], _on(Path(name), builtin_scopes), True) for name in BUILTIN_EXTS], "-e")
+    builtins = Section("Built-in", [Item(name, [name], builtin_on(name), True) for name in BUILTIN_EXTS], "-e")
     opts = Section("Options", [Item(CONTEXT_OPT, [], True, True)])
     return [builtins, exts, skills, proj, opts]
 

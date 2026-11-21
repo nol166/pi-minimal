@@ -1,6 +1,6 @@
 """Runnable check: python3 test_project_skills.py (or uv run test_project_skills.py)
 
-Discovery is checked against what pi 1.0 loads, not what pi-minimal used to list.
+Discovery is checked against what pi loads (pi 1.6.0; see test_pi_parity.py for the side-by-side check), not what pi-minimal used to list.
 """
 
 import json
@@ -156,7 +156,7 @@ def test_settings_arrays_filter_skills_and_extensions():
         (ext_dir / "off.ts").write_text("")
         (agent / "settings.json").write_text(json.dumps({
             "skills": ["-skills/drop/SKILL.md"],
-            "extensions": ["-off.ts"],
+            "extensions": ["-extensions/off.ts"],
         }))
         cwd = t / "work"
         (cwd / ".git").mkdir(parents=True)
@@ -166,8 +166,99 @@ def test_settings_arrays_filter_skills_and_extensions():
         assert list(_items(sections, "Extensions")) == ["on"], _items(sections, "Extensions")
 
 
+def test_glob_helper_matches_paths_like_minimatch():
+    """'*' and '?' stop at '/', '**' crosses it, and a wildcard never matches a leading dot."""
+    base = Path("/r")
+
+    def hit(rel, pattern):
+        return main._hit(main._keys(base / rel, base), [pattern])
+
+    assert hit("extensions/b.ts", "extensions/*.ts") and hit("extensions/b.ts", "?.ts")
+    assert hit("extensions/b.ts", "b.*") and hit("extensions/b.ts", "**/b.ts")
+    assert not hit("extensions/sub/b.ts", "extensions/*.ts")  # '*' does not cross '/'
+    assert hit("extensions/sub/b.ts", "extensions/**/*.ts") and hit("extensions/b.ts", "extensions/**")
+    assert not hit("extensions", "extensions/**")  # a trailing '**' still needs one file
+    assert not hit("extensions/.hidden.ts", "extensions/*.ts")  # wildcards never match a dot
+    assert not hit("extensions/b.ts", "extensions/*.js")
+    # '+'/'-' are exact: they never match a bare file name, only the relative or absolute path
+    ext = base / "extensions" / "b.ts"
+    assert "b.ts" in main._keys(ext, base) and "b.ts" not in main._exact_keys(ext, base)
+    assert main._hit_exact(main._exact_keys(ext, base), ["./extensions/b.ts", str(ext)])
+    assert not main._hit_exact(main._exact_keys(ext, base), ["b.ts", "extensions/*.ts"])
+
+
+def test_two_extensions_of_the_same_name_are_both_offered():
+    """pi dedupes extensions by path, so a package and a file that share a name both load."""
+    with tempfile.TemporaryDirectory() as t:
+        t = Path(t).resolve()
+        agent = t / "agent"
+        pkg = agent / "npm" / "node_modules" / "dup"
+        (pkg / "dist").mkdir(parents=True)
+        pkg_file = pkg / "dist" / "index.js"
+        pkg_file.write_text("")
+        (pkg / "package.json").write_text(json.dumps({"pi": {"extensions": ["./dist"]}}))
+        file_ext = agent / "extensions" / "dup.ts"
+        file_ext.parent.mkdir(parents=True)
+        file_ext.write_text("")
+        (agent / "settings.json").write_text(json.dumps({"packages": ["npm:dup"]}))
+        cwd = t / "work"
+        (cwd / ".git").mkdir(parents=True)
+        with _sandbox(t, cwd, agent):
+            exts = _items(main.discover(), "Extensions")
+        assert exts["dup"].args == [str(pkg_file)], exts
+        assert exts["dup (Extensions)"].args == [str(file_ext)], exts
+
+
+def test_project_extensions_are_discovered_and_only_their_own_scope_filters_them():
+    """<cwd>/.pi/extensions is listed; project and user settings never cross over."""
+    with tempfile.TemporaryDirectory() as t:
+        t = Path(t).resolve()
+        agent = t / "agent"
+        (agent / "extensions").mkdir(parents=True)
+        user_ext = agent / "extensions" / "user.ts"
+        user_ext.write_text("")
+        root = t / "repo"
+        proj_ext = root / ".pi" / "extensions" / "proj.ts"
+        proj_ext.parent.mkdir(parents=True)
+        proj_ext.write_text("")
+        (root / ".git").mkdir(parents=True)
+        (agent / "settings.json").write_text(json.dumps({"extensions": ["-extensions/proj.ts"]}))
+        (root / ".pi" / "settings.json").write_text(json.dumps({"extensions": ["-extensions/user.ts"]}))
+        with _sandbox(t, root, agent):
+            names = list(_items(main.discover(), "Extensions"))
+        assert names == ["proj", "user"], names  # project first, and neither '-' touches the other's files
+
+        (root / ".pi" / "settings.json").write_text(json.dumps({"extensions": ["-extensions/proj.ts"]}))
+        with _sandbox(t, root, agent):
+            names = list(_items(main.discover(), "Extensions"))
+        assert names == ["user"], names
+
+
+def test_settings_entries_add_extensions():
+    """An `extensions` entry naming a path adds it, resolved against its own settings directory."""
+    with tempfile.TemporaryDirectory() as t:
+        t = Path(t).resolve()
+        agent, root = t / "agent", t / "repo"
+        (root / ".git").mkdir(parents=True)
+        user_ext = agent / "extras" / "one.ts"
+        user_ext.parent.mkdir(parents=True)
+        user_ext.write_text("")
+        vendor = root / "vendor" / "two.ts"
+        vendor.parent.mkdir(parents=True)
+        vendor.write_text("")
+        (agent / "settings.json").write_text(json.dumps({"extensions": ["extras/one.ts"]}))
+        (root / ".pi").mkdir()
+        (root / ".pi" / "settings.json").write_text(json.dumps({"extensions": ["../vendor/two.ts"]}))
+        cwd = t / "work"
+        (cwd / ".git").mkdir(parents=True)
+        with _sandbox(t, root, agent):
+            exts = _items(main.discover(), "Extensions")
+        assert exts["one"].args == [str(user_ext)], exts
+        assert exts["two"].args == [str(vendor)], exts
+
+
 def test_package_uses_its_declared_extension_paths():
-    """A package declaring ./dist loads dist/*.js, not a guessed source file."""
+    """A directory entry resolves like an extension folder: index.ts, index.js, else its files."""
     with tempfile.TemporaryDirectory() as t:
         t = Path(t).resolve()
         agent = t / "agent"
@@ -182,15 +273,16 @@ def test_package_uses_its_declared_extension_paths():
         (cwd / ".git").mkdir(parents=True)
         with _sandbox(t, cwd, agent):
             exts = _items(main.discover(), "Extensions")
-        assert exts["fake-pkg"].args == [str(pkg / "dist" / "index.js"),
-                                         str(pkg / "dist" / "mcp-cli.js")], exts["fake-pkg"].args
+        assert exts["fake-pkg"].args == [str(pkg / "dist" / "index.js")], exts["fake-pkg"].args
 
-        # a "-" filter on one of the declared files drops just that file
+        # without an index, dist/ is its loose files, and a "-" filter drops just one of them
+        (pkg / "dist" / "other.js").write_text("")
+        (pkg / "dist" / "index.js").unlink()
         (agent / "settings.json").write_text(json.dumps(
             {"packages": [{"source": "npm:fake-pkg", "extensions": ["-dist/mcp-cli.js"]}]}))
         with _sandbox(t, cwd, agent):
             exts = _items(main.discover(), "Extensions")
-        assert exts["fake-pkg"].args == [str(pkg / "dist" / "index.js")], exts["fake-pkg"].args
+        assert exts["fake-pkg"].args == [str(pkg / "dist" / "other.js")], exts["fake-pkg"].args
 
 
 def test_package_skill_filters():
