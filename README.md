@@ -15,7 +15,7 @@
 <br>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/nol166/pi-minimal/main/assets/screen.svg" alt="The pi-minimal picker: built-in extensions, extensions, skills and project skills, each with a checkbox, and the pi command that will run" width="760">
+  <img src="https://raw.githubusercontent.com/nol166/pi-minimal/main/assets/demo.gif" alt="Running pi-minimal: ticking an extension, a skill and a project skill, then pressing Enter, and pi starting with only those loaded" width="760">
 </p>
 
 <br>
@@ -46,7 +46,7 @@ pi-minimal          # pick, then launch pi
 pi-minimal --list   # print every item and the command that would run
 ```
 
-| Key | |
+| Key | Action |
 | --- | --- |
 | `j` `k` / `↑` `↓` | move |
 | `space` | toggle |
@@ -57,7 +57,7 @@ Run it from a project directory to see that project's skills, extensions and set
 
 ## Configuration
 
-| | |
+| File or variable | What it is |
 | --- | --- |
 | `~/.config/pi-minimal/selections.json` | your saved picks ([format](docs/discovery.md#selections-file)) |
 | `~/.config/pi-minimal/config.json` | `{"default_checked": [...]}`: items ticked before your first launch |
@@ -75,4 +75,4 @@ python3 tests/test_project_skills.py
 python3 tests/test_pi_parity.py   # diff against the installed pi's resolver (needs node)
 ```
 
-No dependencies beyond the standard library. `python3 assets/build.py` redraws the README graphics.
+No dependencies beyond the standard library. `python3 assets/build.py` redraws the README graphics, and `vhs assets/demo/demo.tape` re-records the demo in a throwaway home.
