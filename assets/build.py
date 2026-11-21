@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Regenerate the README graphics: python3 assets/build.py
 
-Writes hero-{light,dark}.svg and screen-{light,dark}.svg next to this file. Both
-themes share one geometry; only the palette differs. The screen is a drawing of the
-TUI with made-up item names, laid out exactly as pi_minimal._draw lays it out.
+Writes hero.svg and screen.svg next to this file. Both are dark cards with their own
+background, so they read the same on a light or dark page, on GitHub (whose theme the
+README can't detect: prefers-color-scheme follows the OS) and on PyPI. The screen is a
+drawing of the TUI with made-up item names, laid out exactly as pi_minimal._draw does.
 """
 
 from pathlib import Path
@@ -25,7 +26,7 @@ def hero(c: dict) -> str:
     rows = [(118, True), (82, False), (146, False), (96, True), (130, True), (70, False)]
     x0, y0, step, box = 302, 44, 26, 14
     join_x, cy = x0 + 242, y0 + box / 2 + step * (len(rows) - 1) / 2
-    out = []
+    out = [f'<rect x=".5" y=".5" width="959" height="299" rx="16" fill="{c["window"]}" stroke="{c["line"]}"/>']
     for i, (w, on) in enumerate(rows):
         y = y0 + i * step
         if on:
@@ -115,7 +116,7 @@ def screen(c: dict) -> str:
 
 
 if __name__ == "__main__":
-    for theme, c in PALETTES.items():
-        (HERE / f"hero-{theme}.svg").write_text(hero(c))
-        (HERE / f"screen-{theme}.svg").write_text(screen(c))
+    c = PALETTES["dark"]
+    (HERE / "hero.svg").write_text(hero(c))
+    (HERE / "screen.svg").write_text(screen(c))
     print("wrote", ", ".join(sorted(p.name for p in HERE.glob("*.svg"))))
