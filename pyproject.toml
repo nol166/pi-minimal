@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Start pi with only the extensions and skills you pick"
 readme = "README.md"
 requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = []
 keywords = ["pi", "coding-agent", "llm", "tui", "cli", "skills", "extensions"]
 classifiers = [
@@ -23,11 +25,11 @@ Issues = "https://github.com/nol166/pi-minimal/issues"
 pi-minimal = "pi_minimal:main"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 only-include = ["pi_minimal.py"]
 
 [tool.hatch.build.targets.sdist]
-include = ["pi_minimal.py", "tests/", "README.md", "docs/", "assets/"]
+include = ["pi_minimal.py", "tests/", "README.md", "LICENSE", "docs/", "assets/"]
