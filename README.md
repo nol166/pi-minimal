@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
-    <img src="assets/hero-light.svg" alt="pi-minimal" width="640">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/nol166/pi-minimal/main/assets/hero-dark.svg">
+    <img src="https://raw.githubusercontent.com/nol166/pi-minimal/main/assets/hero-light.svg" alt="pi-minimal" width="640">
   </picture>
 </p>
 
@@ -19,8 +19,8 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/screen-dark.svg">
-    <img src="assets/screen-light.svg" alt="The pi-minimal picker: built-in extensions, extensions, skills and project skills, each with a checkbox, and the pi command that will run" width="760">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/nol166/pi-minimal/main/assets/screen-dark.svg">
+    <img src="https://raw.githubusercontent.com/nol166/pi-minimal/main/assets/screen-light.svg" alt="The pi-minimal picker: built-in extensions, extensions, skills and project skills, each with a checkbox, and the pi command that will run" width="760">
   </picture>
 </p>
 
