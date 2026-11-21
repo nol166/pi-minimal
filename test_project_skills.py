@@ -5,6 +5,7 @@ Discovery is checked against what pi 1.0 loads, not what pi-minimal used to list
 
 import json
 import os
+import shlex
 import tempfile
 from pathlib import Path
 
@@ -360,6 +361,95 @@ def test_stale_opt_out_for_a_current_item_is_dropped():
         saved = json.loads(state.read_text())
         assert "builtin:mcp" in saved and "-builtin:mcp" not in saved, saved
         assert "-elsewhere" in saved, saved
+
+
+def _line_sections() -> list[main.Section]:
+    """Built-in with a ticked and an unticked item, an empty section, and Options."""
+    return [
+        main.Section("Built-in", [main.Item("builtin:mcp", ["builtin:mcp"], True, True),
+                                  main.Item("builtin:codemode", ["builtin:codemode"], False, True)], "-e"),
+        main.Section("Project skills", [], "--skill"),
+        main.Section("Options", [main.Item(main.CONTEXT_OPT, [], True, True)]),
+    ]
+
+
+def test_lines_is_the_scrollable_body():
+    """Header, items with their flat index, gap; an empty section still gets both lines."""
+    sections = _line_sections()
+    assert main._lines(sections) == [
+        ("BUILT-IN", None),
+        (" [x] builtin:mcp", 0),
+        (" [ ] builtin:codemode", 1),
+        ("", None),
+        ("PROJECT SKILLS", None),
+        ("", None),
+        ("OPTIONS", None),
+        (f" [x] {main.CONTEXT_OPT}", 2),
+        ("", None),
+    ]
+
+
+def test_lines_indexes_match_flat():
+    sections = _line_sections()
+    flat = main._flat(sections)
+    indexed = [(idx, text) for text, idx in main._lines(sections) if idx is not None]
+    assert [idx for idx, _ in indexed] == list(range(len(flat))), indexed
+    assert [text == f" {'[x]' if it.checked else '[ ]'} {it.name}"
+            for (idx, text), it in zip(indexed, flat)] == [True] * len(flat), indexed
+
+
+def test_scroll_keeps_the_cursor_in_view():
+    assert main._scroll(5, 7, 10) == 5, "already in view: top stays"
+    assert main._scroll(5, 5, 10) == 5, "top row is in view"
+    assert main._scroll(5, 14, 10) == 5, "last visible row is in view"
+    assert main._scroll(5, 2, 10) == 2, "above: bring it to the top (also after wrapping)"
+    assert main._scroll(5, 15, 10) == 6, "below: scroll by one"
+    assert main._scroll(0, 0, 10) == 0, "never above the first line"
+    assert main._scroll(3, 0, 10) == 0, "clamped at 0"
+    assert main._scroll(0, 4, 1) == 4, "one row tall follows the cursor"
+    assert main._scroll(4, 3, 0) == 0, "no body rows"
+    assert main._scroll(4, 3, -2) == 0, "nonsense height"
+
+
+def test_list_output_quotes_paths_with_spaces():
+    """Both --list and the TUI footer show shlex.join, so a spaced path is readable."""
+    spaced = "/tmp/my skills/SKILL.md"
+    sections = [main.Section("Skills", [main.Item("spaced", [spaced], True)], "--skill")]
+    out = "\n".join(main._list_lines(sections))
+    assert shlex.join(main.build_command(sections)) in out, out
+    assert f"'{spaced}'" in out, out
+    assert shlex.split(out.splitlines()[-1])[1:] == main.build_command(sections), out
+
+
+
+class _FakeScreen:
+    """Just enough of a curses window for _draw: records what lands on each row."""
+
+    def __init__(self, h: int, w: int):
+        self.h, self.w, self.rows = h, w, {}
+
+    def erase(self):
+        self.rows = {}
+
+    def getmaxyx(self):
+        return self.h, self.w
+
+    def addnstr(self, row, col, text, n, *attr):
+        self.rows[row] = text[:n]
+
+    def refresh(self):
+        pass
+
+
+def test_scrolling_up_to_a_first_item_shows_its_section_header():
+    """Wrapping back to the first item must not leave the section title scrolled off."""
+    secs = [main.Section("Built-in", [main.Item(f"b{i}", [f"b{i}"]) for i in range(3)], "-e"),
+            main.Section("Skills", [main.Item(f"s{i}", [f"/s{i}"]) for i in range(30)], "--skill")]
+    scr = _FakeScreen(10, 40)
+    top = main._draw(scr, secs, 32, 0)  # last item: scrolled to the bottom
+    assert top > 0, top
+    top = main._draw(scr, secs, 0, top)  # wrap to the first item
+    assert scr.rows[2] == "BUILT-IN" and scr.rows[3] == " [ ] b0", scr.rows
 
 
 if __name__ == "__main__":

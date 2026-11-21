@@ -11,6 +11,7 @@ import curses
 import fnmatch
 import json
 import os
+import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -418,35 +419,67 @@ def build_command(sections) -> list[str]:
     return args
 
 
-def _draw(stdscr, sections, cursor) -> None:
-    stdscr.erase()
-    h, w = stdscr.getmaxyx()
-    for r, line in enumerate(["pi-minimal — check what to load, Enter launches", ""]):
-        if r < h:
-            stdscr.addnstr(0, 0, line, w - 1)
-    row = 2
+# rows 0-1 header, body 2 .. h-3, command h-2, key help h-1
+KEY_HELP = "j/↓ down  k/↑ up  space toggle  enter launch  q quit"
+TOO_SMALL = "terminal too small"
+
+
+def _lines(sections) -> list[tuple[str, int | None]]:
+    """The whole scrollable body as (text, flat item index): section header, its items,
+    then a blank gap. Header and gap lines carry None, so only items can hold the cursor."""
+    out: list[tuple[str, int | None]] = []
     pos = 0
     for sec in sections:
-        if row < h - 3:
-            stdscr.addnstr(row, 0, sec.name.upper(), w - 1, curses.A_BOLD)
-        row += 1
+        out.append((sec.name.upper(), None))
         for it in sec.items:
-            if row >= h - 3:
-                break
-            mark = "[x]" if it.checked else "[ ]"
-            label = f" {mark} {it.name}"
-            if pos == cursor:
-                stdscr.addnstr(row, 0, label[: w - 1], w - 1, curses.A_REVERSE)
-            else:
-                stdscr.addnstr(row, 0, label, w - 1)
+            out.append((f" {'[x]' if it.checked else '[ ]'} {it.name}", pos))
             pos += 1
-            row += 1
-        row += 1
-    cmd = " ".join(build_command(sections))
-    if h >= 2:
-        stdscr.addnstr(h - 2, 0, cmd[: w - 1], w - 1, curses.A_DIM)
-    stdscr.addnstr(h - 1, 0, "↑/j down  ↓/k up  space toggle  enter launch  q quit"[: w - 1], w - 1)
+        out.append(("", None))
+    return out
+
+
+def _scroll(top: int, cursor_line: int, height: int) -> int:
+    """First visible body line after the cursor moved to `cursor_line` in `height` rows."""
+    if height < 1:
+        return 0
+    if cursor_line < top:
+        return max(cursor_line, 0)
+    if cursor_line >= top + height:
+        return max(cursor_line - height + 1, 0)
+    return top
+
+
+def _draw(stdscr, sections, cursor, top) -> int:
+    """Paint one frame; returns the body scroll position to keep for the next one."""
+    stdscr.erase()
+    h, w = stdscr.getmaxyx()
+    if h < 5 or w < 20:
+        if h >= 1 and w >= 2:
+            stdscr.addnstr(0, 0, TOO_SMALL, w - 1)
+        stdscr.refresh()
+        return top
+    for r, line in enumerate(["pi-minimal — check what to load, Enter launches", ""]):
+        if r < h:
+            stdscr.addnstr(r, 0, line, w - 1)
+    lines = _lines(sections)
+    cursor_line = next((i for i, (_, idx) in enumerate(lines) if idx == cursor), 0)
+    height = h - 4
+    top = _scroll(top, cursor_line, height)
+    # scrolled up onto a section's first item: show its header too, if the cursor still fits
+    if top and lines[top - 1][1] is None and lines[top - 1][0] and cursor_line - top + 1 < height:
+        top -= 1
+    for r, (text, idx) in enumerate(lines[top:top + height]):
+        row = 2 + r
+        if idx == cursor:
+            stdscr.addnstr(row, 0, text[: w - 1], w - 1, curses.A_REVERSE)
+        elif idx is None and text:
+            stdscr.addnstr(row, 0, text, w - 1, curses.A_BOLD)
+        else:
+            stdscr.addnstr(row, 0, text, w - 1)
+    stdscr.addnstr(h - 2, 0, shlex.join(build_command(sections))[: w - 1], w - 1, curses.A_DIM)
+    stdscr.addnstr(h - 1, 0, KEY_HELP[: w - 1], w - 1)
     stdscr.refresh()
+    return top
 
 
 def _flat(sections):
@@ -481,9 +514,10 @@ def _tui(stdscr) -> None:
     load_state(sections)
     flat = _flat(sections)
     cursor = next(i for i, it in enumerate(flat) if it.checked) if any(i.checked for i in flat) else 0
+    top = 0
     try:
         while True:
-            _draw(stdscr, sections, cursor)
+            top = _draw(stdscr, sections, cursor, top)
             key = stdscr.getkey()
             if key in ("KEY_UP", "k"):
                 cursor = _move(sections, cursor, -1)
@@ -503,15 +537,24 @@ def _tui(stdscr) -> None:
         save_state(sections)  # same as q: keep the selection, exit cleanly
 
 
+def _list_lines(sections) -> list[str]:
+    """What --list prints: every item with its checkboxes, then the command it would run."""
+    out = []
+    for sec in sections:
+        out.append(sec.name)
+        for it in sec.items:
+            out.append(f"  {'[x]' if it.checked else '[ ]'} {it.name}  ->  {' '.join(it.args) or '-'}")
+    out.append("")
+    out.append("$ " + shlex.join(build_command(sections)))
+    return out
+
+
 def main() -> None:
     if "--list" in sys.argv:
         sections = discover()
         load_state(sections)
-        for sec in sections:
-            print(sec.name)
-            for it in sec.items:
-                print(f"  {'[x]' if it.checked else '[ ]'} {it.name}  ->  {' '.join(it.args) or '-'}")
-        print("\n$ " + " ".join(build_command(sections)))
+        for line in _list_lines(sections):
+            print(line)
         return
     curses.wrapper(_tui)
 
