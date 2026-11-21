@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1" # weekly: catches a new pi release that changes discovery
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv run --no-project python tests/test_project_skills.py
+      - name: Package installs and runs
+        run: |
+          uv build
+          uv tool install dist/*.whl
+          pi-minimal --version
+          pi-minimal --help
+
+  parity:
+    # pi's own resolver vs discover(). The pinned version must always match; latest
+    # tells us when pi changes its rules.
+    strategy:
+      fail-fast: false
+      matrix:
+        pi: ["1.6.0", "latest"]
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.pi == 'latest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install -g @earendil-works/pi-coding-agent@${{ matrix.pi }}
+      - name: Parity with pi ${{ matrix.pi }}
+        run: |
+          export PI_PKG="$(npm root -g)/@earendil-works/pi-coding-agent"
+          test -f "$PI_PKG/dist/core/package-manager.js" # never let the check skip itself
+          python3 tests/test_pi_parity.py

@@ -698,7 +698,7 @@ def _tui(stdscr) -> None:
                     os.execvpe("pi", build_command(sections), _child_env())
                 except FileNotFoundError:
                     sys.exit("pi-minimal: `pi` is not on PATH. Your selection was saved; "
-                             "run `uv run main.py --list` for the command.")
+                             "run `pi-minimal --list` for the command.")
             elif key == "q":
                 save_state(sections)
                 return
@@ -718,8 +718,37 @@ def _list_lines(sections) -> list[str]:
     return out
 
 
+USAGE = """usage: pi-minimal [--list]
+
+Pick which pi extensions and skills to load, then launch pi with only those.
+
+  --list       print every item and the pi command that would run, then exit
+  --version    print the version
+  -h, --help   show this help
+
+Keys: j/k or arrows move, space toggles, enter launches pi, q saves and quits."""
+
+
+def _version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("pi-minimal")
+    except Exception:
+        return "unknown (not installed)"
+
+
 def main() -> None:
-    if "--list" in sys.argv:
+    args = sys.argv[1:]
+    if any(a in ("-h", "--help") for a in args):
+        print(USAGE)
+        return
+    if "--version" in args:
+        print(f"pi-minimal {_version()}")
+        return
+    unknown = [a for a in args if a != "--list"]
+    if unknown:
+        sys.exit(f"pi-minimal: unknown option {unknown[0]}\n\n{USAGE}")
+    if "--list" in args:
         sections = discover()
         load_state(sections)
         for line in _list_lines(sections):

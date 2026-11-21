@@ -1,6 +1,6 @@
 """Parity check: what pi itself loads vs what pi-minimal lists, scenario by scenario.
 
-Runnable: python3 test_pi_parity.py (exit 1 on any difference).
+Runnable: python3 tests/test_pi_parity.py (exit 1 on any difference).
 
 Each scenario builds a fixture tree (a home, an agent directory, a repo), asks the
 installed pi's own package manager what it resolves (pi_resolve.mjs), and compares
@@ -24,8 +24,8 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
-import main  # noqa: E402
+sys.path.insert(0, str(HERE.parent))
+import pi_minimal as main  # noqa: E402
 
 
 def pi_package() -> Path | None:

@@ -1,4 +1,4 @@
-"""Runnable check: python3 test_project_skills.py (or uv run test_project_skills.py)
+"""Runnable check: python3 tests/test_project_skills.py
 
 Discovery is checked against what pi loads (pi 1.6.0; see test_pi_parity.py for the side-by-side check), not what pi-minimal used to list.
 """
@@ -6,10 +6,12 @@ Discovery is checked against what pi loads (pi 1.6.0; see test_pi_parity.py for 
 import json
 import os
 import shlex
+import sys
 import tempfile
 from pathlib import Path
 
-import main
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import pi_minimal as main  # noqa: E402
 
 
 def _make_skill(root: Path, rel: str, name: str | None = None) -> Path:
