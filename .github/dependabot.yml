@@ -1,0 +1,7 @@
+version: 2
+updates:
+  # keeps the workflow actions current (setup-uv has no floating major tag to follow)
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
