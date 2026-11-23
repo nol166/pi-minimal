@@ -287,6 +287,38 @@ def test_package_uses_its_declared_extension_paths():
         assert exts["fake-pkg"].args == [str(pkg / "dist" / "other.js")], exts["fake-pkg"].args
 
 
+def test_multi_file_extension_gets_one_flag_per_file():
+    """pi's -e takes one value; a second path after it would be sent as the opening prompt."""
+    sections = [main.Section("Extensions", [main.Item("pkg", ["/p/a.js", "/p/b.js"], True)], "-e")]
+    cmd = main.build_command(sections)
+    assert cmd[-4:] == ["-e", "/p/a.js", "-e", "/p/b.js"], cmd
+
+
+def test_package_items_start_unchecked():
+    """With no state file and no config defaults, a package's extension and skills stay off."""
+    with tempfile.TemporaryDirectory() as t:
+        t = Path(t).resolve()
+        agent = t / "agent"
+        pkg = agent / "git" / "github.com" / "someone" / "pkg"
+        (pkg / "pi-extension").mkdir(parents=True)
+        (pkg / "pi-extension" / "index.js").write_text("")
+        _make_skill(pkg, "skills/pkg")
+        (pkg / "package.json").write_text(json.dumps({"pi": {"extensions": ["./pi-extension"], "skills": ["./skills"]}}))
+        (agent / "settings.json").write_text(json.dumps({"packages": ["git:github.com/someone/pkg"]}))
+        cwd = t / "work"
+        (cwd / ".git").mkdir(parents=True)
+        old_state = main.STATE_FILE
+        main.STATE_FILE = t / "state" / "selections.json"
+        try:
+            with _sandbox(t, cwd, agent):
+                sections = main.discover()
+                main.load_state(sections)
+        finally:
+            main.STATE_FILE = old_state
+        on = [i.name for s in sections[1:4] for i in s.items if i.checked]
+        assert on == [], on
+
+
 def test_package_skill_filters():
     with tempfile.TemporaryDirectory() as t:
         t = Path(t).resolve()
