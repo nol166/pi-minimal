@@ -585,8 +585,9 @@ def build_command(sections) -> list[str]:
             if not sec.flag:  # Options: checked means leave pi's default alone
                 if not it.checked:
                     args.append("--no-context-files")
-            elif it.checked:
-                args += [sec.flag, *it.args]
+            elif it.checked:  # pi's -e/--skill take one value each; a second would become the prompt
+                for value in it.args:
+                    args += [sec.flag, value]
     return args
 
 
